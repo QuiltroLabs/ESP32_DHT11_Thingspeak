@@ -39,9 +39,9 @@ const int daylightOffset_sec = 0;
 struct data_time{  
     int hour = 0;
     int minute = 0;
-    int c_ask_time=0;
-    int c_ask_wheather=0;
+    int c_time=0;    
     int error_asking_time = 0;
+    boolean f_1_second = false;
 };
 
 data_time TIMING;
@@ -57,6 +57,9 @@ struct sensor_data{
 };
 
 sensor_data DHT_SENSOR;
+
+
+
 
 void connectWiFi() {
   Serial.print("Connecting to ");
@@ -80,6 +83,7 @@ void connectWiFi() {
   digitalWrite(LED_WIFI, HIGH);
 }
 
+/* 
 void printLocalTime() {
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
@@ -91,51 +95,28 @@ void printLocalTime() {
   Serial.println(&timeinfo, "%I");
   Serial.print("AM/PM: ");
   Serial.println(timeinfo.tm_hour >= 12 ? "PM" : "AM");
-  Serial.println();
-  
-}
+  Serial.println();  
+} */
 
-void setup() {
-  pinMode(LED_WIFI, OUTPUT);
-  digitalWrite(LED_WIFI, LOW);
-
-  Serial.begin(115200);
-  display.setBrightness(0x0f);
-
-  // Connect to Wi-Fi
-  connectWiFi();
-
-  // Initialize NTP
-  Serial.print("Initializing NTP..");
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  Serial.print("Local Time Printing..");
-  printLocalTime();
-
-  Serial.println(F("DHTxx test!"));
-  dht.begin();
-
-  ThingSpeak.begin(client); // Initialize ThingSpeak
-}
-
-int getTime(int &hour, int &minute){
+int getTime(){
     //static int lastHour = 12, lastMinute = 0; // Default to 12:00
     struct tm timeinfo;
     if (!getLocalTime(&timeinfo)){
-      Serial.println("Failed to obtain time");
+      //Serial.println("Failed to obtain time");
       display.showNumberDec(8888, false);
       delay(100);
       return 1;//ERROR
     }else{
       // Update time
-      hour = timeinfo.tm_hour;  // 24 hour
+      TIMING.hour = timeinfo.tm_hour;  // 24 hour
       //int hour = timeinfo.tm_hour % 12 == 0 ? 12 : timeinfo.tm_hour % 12;  // 12 hour 
-      minute = timeinfo.tm_min;
-      //lastHour = TIMING_DATA.hour;
-      //lastMinute = TIMING_DATA.minute;
+      TIMING.minute = timeinfo.tm_min;
+      /*
       Serial.print(hour);
       Serial.print(F(":"));
       Serial.print(minute);
-      Serial.println();
+      Serial.println(); 
+      */
     }    
     return 0;//no error 
 }
@@ -147,6 +128,8 @@ void blinkColon(int hour, int minute, bool showColon){
   display.showNumberDecEx(minute, 0, true, 2, 2);
 }
 
+/// @brief 
+/// @return 
 int sensor(){
   // Wait a few seconds between measurements.
   //delay(2000);
@@ -174,8 +157,7 @@ int sensor(){
   DHT_SENSOR.temp_f = f;
   DHT_SENSOR.sens_term_hif = hif;
   DHT_SENSOR.sens_term_hic = hic;
-
-
+  /* 
   Serial.print(F("Humidity: "));
   Serial.print(h);
   Serial.print(F("%  Temperature: "));
@@ -186,11 +168,12 @@ int sensor(){
   Serial.print(hic);
   Serial.print(F("°C "));
   Serial.print(hif);
-  Serial.println(F("°F"));
-
+  Serial.println(F("°F")); 
+  */
   return 0;
 }
-int updte_sensor(){
+
+int update_sensor(){
   ThingSpeak.setField(1, DHT_SENSOR.temp_c);
   ThingSpeak.setField(2, DHT_SENSOR.temp_f);
   ThingSpeak.setField(3, DHT_SENSOR.humidity);
@@ -198,19 +181,57 @@ int updte_sensor(){
   ThingSpeak.setField(5, DHT_SENSOR.sens_term_hif);
 
   // Write to ThingSpeak. There are up to 8 fields in a channel, allowing you to store up to 8 different
-
   // pieces of information in a channel. Here, we write to field 1.
 
   int x = ThingSpeak.writeFields(myChannelNumber,myWriteAPIKey);
 
-    if(x == 200){
-    Serial.println("Channel update successful.");
-    }
-    else{
-      Serial.println("Problem updating channel. HTTP error code " + String(x));
+    if(x != 200){
+      Serial.println("Problem updating channel. HTTP error code " + String(x));    
+      return 1; //error
     }
 
+return 0;    
 }
+
+hw_timer_t * timer = NULL;
+
+/// @brief Timer interrupt handler each call is each 1 second
+/// @return void
+void IRAM_ATTR onTimer0(){  
+  //Serial.println(String("onTimer() ")+String(millis()));
+  TIMING.f_1_second = true; //set flag to update time
+  TIMING.c_time++;
+
+}
+
+void setup() {
+  pinMode(LED_WIFI, OUTPUT);
+  digitalWrite(LED_WIFI, LOW);
+
+  Serial.begin(115200);
+  display.setBrightness(0x0f);
+
+  // Connect to Wi-Fi
+  connectWiFi();
+
+  // Initialize NTP
+  //Serial.print("Initializing NTP..");
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  //Serial.print("Local Time Printing..");
+  //printLocalTime();
+
+  //Serial.println(F("DHTxx test!"));
+  dht.begin();
+
+  ThingSpeak.begin(client); // Initialize ThingSpeak
+
+  //configuracion timer 0
+  timer = timerBegin(0, 80, true);  // timer 0, MWDT clock period = 12.5 ns * TIMGn_Tx_WDT_CLK_PRESCALE -> 12.5 ns * 80 -> 1000 ns = 1 us, countUp
+  timerAttachInterrupt(timer, &onTimer0, true); // edge (not level) triggered 
+  timerAlarmWrite(timer, 1000000, true); // 1000000 * 1 us = 1 s, autoreload true
+  timerAlarmEnable(timer); // enable
+}
+
 void loop() {
   // Check Wi-Fi connection
   if (WiFi.status() != WL_CONNECTED) {
@@ -219,30 +240,33 @@ void loop() {
     connectWiFi();
   }
 
-//si pasaron 2 seg pedir hora
-  if(TIMING.c_ask_time<4){          
-    TIMING.error_asking_time = getTime(TIMING.hour, TIMING.minute);        
-    TIMING.c_ask_time = 0;        
-  }
-//si pasaron 10 min pedir datos
-  if(TIMING.c_ask_wheather>1200){        
-    //if no error about sensor reading, write data over thingspeak
-    if(sensor() == 0){
-      updte_sensor();     
+  if(TIMING.f_1_second){
+
+    //if passing 2 s ask ask for time
+    if(TIMING.c_time %2 == 0){          
+      TIMING.error_asking_time = getTime();  
+      Serial.println(String("pedido hora")+String(millis()));         
+    }  
+  //if passing 10 min, read sensor and update remote data
+    if(TIMING.c_time >= 600){        
+      //if no error about sensor reading, write data over thingspeak
+      Serial.println(String("pedido sensor")+String(millis()));               
+      if(sensor() == 0){
+        update_sensor();     
+        Serial.println(String("envio remoto")+String(millis()));         
+      }
+      TIMING.c_time=0;
+    }   
+    //if no error in asking time, update hour display 
+    if(TIMING.error_asking_time == 0){
+      // Blink colon
+      static bool colonState = false;
+      blinkColon(TIMING.hour, TIMING.minute, colonState);
+      colonState = !colonState;
     }
-    TIMING.c_ask_wheather=0;
-  }
-  //if no error in asking time, refresh display
-  if(TIMING.error_asking_time == 0){
-    // Blink colon
-    static bool colonState = false;
-    blinkColon(TIMING.hour, TIMING.minute, colonState);
-    colonState = !colonState;
+  
+    TIMING.f_1_second = false; 
   }
   
-  delay(500);
-
-  TIMING.c_ask_time++;
-  TIMING.c_ask_wheather++;
-
+  //vTaskDelay(portMAX_DELAY); // wait as much as posible ...
 }
